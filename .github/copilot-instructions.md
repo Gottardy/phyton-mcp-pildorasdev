@@ -1,62 +1,67 @@
-# Copilot instructions for pildorasDev
+# Copilot / AI Agent instructions for pildorasDev
 
-Breve: este repo es un microservicio mínimo que expone herramientas (FastMCP) para gestionar empleados y persiste en PostgreSQL. Usa `uv` como runtime dentro del contenedor y `psycopg2` para acceso a la base de datos.
+Resumen rápido
+- Proyecto: `pildorasDev` — microservicio Python que expone herramientas (`tools`) con FastMCP para gestionar empleados.
+- Ejecuta en puerto `3000`. Persistencia: PostgreSQL inicializada vía `init.sql`.
 
-- **Arquitectura y por qué**: el servicio principal está en [main.py](main.py). Se registra como `FastMCP` app y publica herramientas con `@app.tool`; el proceso se lanza con `app.run(transport="sse", port=3000)` y se espera que la orquestación use `docker compose` para crear la base de datos y el servidor.
-- **Componentes clave**:
-  - Servicio HTTP SSE / FastMCP: [main.py](main.py)
-  - Inicialización de datos SQL: [init.sql](init.sql)
-  - Contenerización: [Dockerfile](Dockerfile)
-  - Orquestación local: [docker-compose.yml](docker-compose.yml)
-  - Metadatos / dependencias: [pyproject.toml](pyproject.toml)
+Arquitectura y propósito
+- `main.py` implementa las herramientas principales: `list_employees(limit, offset)` y `add_employee(...)` decoradas con `@app.tool` de FastMCP. Mantener la semántica de `tool` (firmas y tipos) al modificar.
+- Base de datos: PostgreSQL. La inicialización de esquema y datos de ejemplo se hace en `init.sql` (montado en `docker-compose`).
+- Contenerización: `Dockerfile` + `docker-compose.yml`. El servicio `mcp-server` depende del servicio `postgres` (nombre de host `postgres` en redes Docker).
 
-- **Patrones y convenciones del proyecto (importantes para agentes)**:
-  - Cada operación pública se implementa como `@app.tool` (ver [main.py](main.py)). Añadir una nueva herramienta significa crear una función, decorarla con `@app.tool` y asegurarse de gestionar la conexión a BD y los cierres en `finally`.
-  - Acceso a DB: se usa `psycopg2` con `RealDictCursor` para que las filas actúen como mappings (evita reindexado por posición). Cierra `cursor` y `conn` en `finally`.
-  - Manejo de errores: las funciones no devuelven objetos de error; lanzan excepciones envolviendo errores en `RuntimeError` para mantener firmas limpias. Mantén ese patrón cuando modifiques herramientas.
-  - Validaciones: `add_employee` valida campos obligatorios y valores (ej.: salary > 0). Sigue la misma estrategia para nuevas entradas.
-  - Imports locales: algunas importaciones (p. ej. `RealDictCursor`) aparecen dentro de funciones — respeta esto si mueves código.
+Puntos críticos y convenciones del proyecto
+- Conexión DB: función `get_db_connection()` en `main.py`. Usa `DB_DATABASE` por defecto y cae a `DB_NAME` si existe. No renombrar variables sin actualizar `docker-compose.yml`.
+- Cursores: se usa `psycopg2.extras.RealDictCursor` para devolver filas como dicts; el código asume claves por nombre (por ejemplo `row["name"]`).
+- Manejo de errores: las funciones propagan errores envolviéndolos en `RuntimeError` (no devolver estructuras mixtas). Mantener esta convención para consistencia con clientes.
+- Validaciones: `add_employee` valida campos obligatorios y valores (p.ej. salary > 0). Mantener validaciones en la capa de tool.
+- Tipos y formatos: `salary` se convierte a `float` al construir el JSON de salida; `hire_date` se devuelve en ISO (`YYYY-MM-DD`).
+- Import patterns: hay importaciones inline para tipos (`from typing import cast`) y para `RealDictCursor` en la función; mantener ese patrón si la importación debe estar dentro de la función.
 
-- **Workflows y comandos reproducibles**:
-  - Levantar todo con Docker Compose (desarrollador):
+Comandos y flujos de desarrollo
+- Levantar todo con Docker (recomendado):
 
-    docker compose up --build -d
+```bash
+docker compose up --build -d
+```
 
-  - Ejecutar localmente sin Docker (crear venv e instalar deps):
+- Servicio expuesto en `http://localhost:3000` (puerto mapeado en `docker-compose.yml`).
+- Construcción local sin Docker (dev):
 
-    python -m venv .venv
-    source .venv/bin/activate
-    pip install -r requirements.txt
-    uv run python main.py
+```bash
+python -m venv .venv
+source .venv/bin/activate
+# El proyecto usa `uv` en Docker; para instalar dependencias localmente usar pip o replicar uv workflow
+pip install -r requirements.txt  # si existe; alternativamente actualizar uv.lock y usar uv
+```
 
-  - Dentro del contenedor se usa `uv` para sincronizar e iniciar (ver [Dockerfile](Dockerfile)).
+- En `Dockerfile` se usa la imagen `ghcr.io/astral-sh/uv` y `uv sync --frozen --no-dev --no-cache` para instalar dependencias. Si cambias dependencias, actualiza `uv.lock` y prueba el `uv sync`.
 
-- **Integraciones y puntos de atención**:
-  - El archivo [docker-compose.yml](docker-compose.yml) monta `./init.sql` en `/docker-entrypoint-initdb.d/` para poblar la BD al iniciar el contenedor Postgres.
-  - Variables de entorno: el código lee `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` (ver [main.py](main.py)), mientras que `docker-compose.yml` configura `DB_DATABASE` para `mcp-server`. Hay una discrepancia entre `DB_NAME` y `DB_DATABASE` — confirma cuál es la variable correcta antes de cambios que toquen la configuración de despliegue o la inicialización.
-  - El servicio Postgres se configura con usuario/clave `test` y base `test_db` en [docker-compose.yml](docker-compose.yml); `init.sql` crea la tabla `employees` y filas de ejemplo.
+Integraciones y puntos de atención
+- `docker-compose.yml` monta `./init.sql` en `/docker-entrypoint-initdb.d/` para poblar la BD al arranque. Si modificas el esquema, actualiza `init.sql` y recrea los volúmenes.
+- Variables de entorno relevantes (ver `docker-compose.yml`): `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_DATABASE`.
+- No depends_on explícito en código: el servicio asume que la DB estará disponible; `docker-compose` usa `depends_on` con `condition: service_healthy`.
 
-- **Qué revisar antes de editar código**:
-  - Asegurarse de usar las mismas claves de entorno que el despliegue (ver la nota sobre `DB_NAME` vs `DB_DATABASE`).
-  - Mantener el patrón de conexión/cleanup (obtener `conn`, crear `cursor` con `RealDictCursor`, `try/except/finally` con `close()` y `conn.commit()` donde proceda).
-  - Preservar la forma de retorno: `list_employees` => `List[Dict[str, Any]]`; `add_employee` => `Dict[str, Any]` con `success` y `employee`.
+Guías para editar y probar código AI-driven
+- Cuando implementes nuevas `@app.tool`:
+  - Mantén firmas tipadas y devuelve tipos JSON-serializables (listas/dict). Ejemplo: `list_employees(...) -> List[Dict[str, Any]]`.
+  - Usa `RealDictCursor` si vas a mapear columnas a claves.
+  - Nunca silencies excepciones: propaga con `RuntimeError` para que el runner del servicio lo capture.
+- Si tocas la persistencia:
+  - Actualiza `init.sql` para infraestructura reproducible.
+  - Si la modificación requiere migraciones, documenta el paso en `README.md`.
+- Dependencias:
+  - Cambios en paquetes deben reflejarse en `pyproject.toml` y en `uv.lock` (si se usa `uv`).
 
-- **Ejemplos útiles sacados del repo**:
-  - Añadir una herramienta mínima:
+Archivos clave (referencias)
+- `main.py` — implementa las herramientas y la lógica DB.
+- `init.sql` — esquema y datos de ejemplo.
+- `docker-compose.yml` — despliegue local: servicios, redes, volúmenes y variables DB.
+- `Dockerfile` — build image, uso de `uv` y comando de ejecución (`uv run python main.py`).
+- `pyproject.toml` — dependencias declaradas (`fastmcp`, `psycopg2`).
 
-    from fastmcp import FastMCP
+Preguntas al autor / puntos por confirmar
+- ¿Existe un endpoint HTTP públicamente documentado para invocar las `tools` de FastMCP además de SSE? (útil para ejemplos concretos).
+- ¿Prefieres instrucciones en inglés para la audiencia internacional? Actualmente este archivo está en español.
 
-    @app.tool
-    def foo() -> str:
-        return "ok"
-
-  - Conectar a BD (usar el helper `get_db_connection()` en [main.py](main.py)).
-
-- **Errores y riesgos detectados** (para que el agente pregunte antes de actuar):
-  - Discrepancia de nombre de variable de DB (`DB_NAME` vs `DB_DATABASE`).
-  - `docker-compose.yml` expone Postgres con la dirección `127.0.0.0:5432:5432` — esto parece atípico (normalmente `127.0.0.1:5432:5432` o `"5432:5432"`). Verifica antes de proponer cambios de red.
-
-- **Dónde practicar cambios seguros**:
-  - Añade nuevas herramientas en `main.py` o en módulos nuevos importados desde `main.py`. Usa la base de datos montada por `docker compose` para pruebas de integración rápidas.
-
-Si te sirve, puedo: 1) añadir tests básicos de integración que usen la base de datos del contenedor, 2) arreglar la discrepancia de variables de entorno y actualizar `docker-compose.yml` y `main.py`. ¿Qué prefieres que haga primero?
+Feedback
+- Revisa estas instrucciones y dime qué agregar o aclarar: ejemplos de input/output para las `tools`, flujos de testing automatizado, o convenciones de commit.
