@@ -21,7 +21,8 @@ services:
       build: .
       container_name: company_mcp_server
       environment:
-        DB_HOST: localhost
+        # Use the docker-compose service name so the container can resolve the DB host
+        DB_HOST: postgres
         DB_PORT: 5432
         DB_USER: test
         DB_PASSWORD: test

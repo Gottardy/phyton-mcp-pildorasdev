@@ -9,7 +9,8 @@ app = FastMCP("pildorasDev_db_server")
 
 def get_db_connection():
     conn = psycopg2.connect(
-        dbname=os.getenv("DB_NAME"),
+        # Prefer `DB_DATABASE` (matches docker-compose); fall back to legacy `DB_NAME`
+        dbname=os.getenv("DB_DATABASE", os.getenv("DB_NAME")),
         user=os.getenv("DB_USER"),
         password=os.getenv("DB_PASSWORD"),
         host=os.getenv("DB_HOST"),
