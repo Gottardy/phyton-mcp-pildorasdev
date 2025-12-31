@@ -11,3 +11,6 @@ wheels/
 
 # VsCode settings
 .vscode/
+
+# Github Copilot settings
+.github/copilot/
