@@ -111,5 +111,138 @@ def add_employee(name: str, position: str, department: str, salary: float, hire_
         if 'conn' in locals() and conn:
             conn.close()
 
+
+@app.tool
+def get_employee(employee_id: int) -> Dict[str, Any]:
+    """Get a single employee by id"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            """
+            SELECT id, name, position, department, salary, hire_date
+            FROM employees
+            WHERE id = %s
+            """,
+            (employee_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError(f"Employee with id {employee_id} not found.")
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "position": row["position"],
+            "department": row["department"],
+            "salary": float(row["salary"]),
+            "hire_date": row["hire_date"].isoformat() if row["hire_date"] else None,
+        }
+    except Exception as e:
+        raise RuntimeError(f"Error getting employee: {e}") from e
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+@app.tool
+def update_employee(employee_id: int, name: Optional[str] = None, position: Optional[str] = None, department: Optional[str] = None, salary: Optional[float] = None, hire_date: Optional[str] = None) -> Dict[str, Any]:
+    """Update an existing employee's fields (partial updates allowed)"""
+    conn = None
+    cursor = None
+    try:
+        if name is not None and not name.strip():
+            raise ValueError("Name cannot be empty.")
+        if salary is not None and salary <= 0:
+            raise ValueError("Salary must be a non-negative number.")
+
+        fields: List[str] = []
+        values: List[Any] = []
+
+        if name is not None:
+            fields.append("name = %s")
+            values.append(name.strip())
+        if position is not None:
+            fields.append("position = %s")
+            values.append(position.strip())
+        if department is not None:
+            fields.append("department = %s")
+            values.append(department.strip())
+        if salary is not None:
+            fields.append("salary = %s")
+            values.append(salary)
+        if hire_date is not None:
+            hire_date_obj = datetime.fromisoformat(hire_date) if hire_date else None
+            fields.append("hire_date = %s")
+            values.append(hire_date_obj)
+
+        if not fields:
+            raise ValueError("At least one field must be provided to update.")
+
+        conn = get_db_connection()
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+
+        # build parameterized query
+        set_clause = ", ".join(fields)
+        values.append(employee_id)
+        sql = f"UPDATE employees SET {set_clause} WHERE id = %s RETURNING id, name, position, department, salary, hire_date"
+        cursor.execute(sql, tuple(values))
+        updated = cursor.fetchone()
+        if updated is None:
+            raise RuntimeError(f"Employee with id {employee_id} not found or not updated.")
+        conn.commit()
+        return {
+            "success": True,
+            "employee": {
+                "id": updated["id"],
+                "name": updated["name"],
+                "position": updated["position"],
+                "department": updated["department"],
+                "salary": float(updated["salary"]),
+                "hire_date": updated["hire_date"].isoformat() if updated["hire_date"] else None,
+            },
+        }
+    except Exception as e:
+        raise RuntimeError(f"Error updating employee: {e}") from e
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+@app.tool
+def delete_employee(employee_id: int) -> Dict[str, Any]:
+    """Delete an employee by id"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        from psycopg2.extras import RealDictCursor
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            """
+            DELETE FROM employees WHERE id = %s RETURNING id
+            """,
+            (employee_id,),
+        )
+        deleted = cursor.fetchone()
+        if deleted is None:
+            raise RuntimeError(f"Employee with id {employee_id} not found.")
+        conn.commit()
+        return {"success": True, "deleted_id": deleted["id"]}
+    except Exception as e:
+        raise RuntimeError(f"Error deleting employee: {e}") from e
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 if __name__ == "__main__":
     app.run(transport="sse", host="0.0.0.0", port=3000)
